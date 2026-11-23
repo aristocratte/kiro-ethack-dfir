@@ -12,6 +12,13 @@ en **Orden_Volatilidad** (RFC 3227) y con **Cadena_Custodia** encadenada por has
 > **guías y comandos** sobre herramientas reales (`docker`, `sha256sum`, `tar`,
 > `grep`).
 
+> **Formato del Power (instalable en Kiro).** Igual que el cimiento `dfir-linux`:
+> un `POWER.md` en la raíz (con el frontmatter y el bloque `x-ethack`) y las guías
+> de conocimiento en `steering/` (una por archivo, cargadas bajo demanda). Así se
+> instala con **Add Custom Power → Local Directory**. La variante original con
+> `plugin.json` + `skills/` **no** la reconocía ese instalador; `make validate` lee
+> el mismo contrato `x-ethack` del frontmatter y sigue en verde.
+
 ## Ubicación en el ciclo
 
 - `kind: forensics` · `forensicsStage: Collect` · `ecCouncilPhase: null`
@@ -41,16 +48,16 @@ en **Orden_Volatilidad** (RFC 3227) y con **Cadena_Custodia** encadenada por has
 | **Analyze** | `.tar` extraído en solo lectura: `docker diff` (A/C/D) → logs Apache → artefactos de usuario → anti-forense. Cada hallazgo con evidencia y técnica MITRE ATT&CK. | `docker-evidence-analysis` |
 | **Report** | Cronología, IoC, mapeo ATT&CK, Cadena_Custodia y remediación. | `docker-forensics-report` |
 
-## Skills (`skills/`)
+## Guías de conocimiento (`steering/`)
 
 Las guías se leen **bajo demanda** (divulgación progresiva); carga solo la del paso
-en que estés.
+en que estés. Son las tres antiguas skills, ahora como archivos de `steering/`.
 
-| Skill | Cubre | Contenido |
+| Guía | Cubre | Contenido |
 |---|---|---|
-| [`docker-evidence-collection`](skills/docker-evidence-collection/SKILL.md) | Isolate · **Collect** · Preserve | Aislamiento sin pérdida de estado, recolección en Orden_Volatilidad, hashing y Cadena_Custodia encadenada. |
-| [`docker-evidence-analysis`](skills/docker-evidence-analysis/SKILL.md) | Analyze | Análisis del `.tar` en solo lectura: `docker diff`, logs Apache, artefactos de usuario y detección de borrado de huellas, con evidencia + MITRE ATT&CK por hallazgo. |
-| [`docker-forensics-report`](skills/docker-forensics-report/SKILL.md) | Report | Modelo de reporte técnico: cronología, IoC, mapeo ATT&CK, Cadena_Custodia y remediación. |
+| [`docker-evidence-collection`](steering/docker-evidence-collection.md) | Isolate · **Collect** · Preserve | Aislamiento sin pérdida de estado, recolección en Orden_Volatilidad, hashing y Cadena_Custodia encadenada. |
+| [`docker-evidence-analysis`](steering/docker-evidence-analysis.md) | Analyze | Análisis del `.tar` en solo lectura: `docker diff`, logs Apache, artefactos de usuario y detección de borrado de huellas, con evidencia + MITRE ATT&CK por hallazgo. |
+| [`docker-forensics-report`](steering/docker-forensics-report.md) | Report | Modelo de reporte técnico: cronología, IoC, mapeo ATT&CK, Cadena_Custodia y remediación. |
 
 ## Modos de ejecución (`Modo_Ejecucion`)
 
@@ -74,14 +81,14 @@ solo el instructor. El perfil usado se anota en la Cadena_Custodia y en el repor
   `chain_of_custody.jsonl`. **Rutas derivadas de `ENGAGEMENT_ID`** (camino completo,
   donde vive el `scope.yaml` real), nada en duro; el contenedor objetivo se lee del
   `scope.yaml` del engagement.
-- Reporte técnico (skill `docker-forensics-report`) trazable a cada evidencia por su
+- Reporte técnico (guía `docker-forensics-report`) trazable a cada evidencia por su
   `sha256`.
 
 > **Evidencia pesada fuera del repo.** El `.tar` del export y el `rootfs` extraído no
 > se versionan (`.gitignore`: `engagements/*/evidence/*` y `engagements/*/analysis/`);
 > lo único que queda en `evidence/` es `chain_of_custody.jsonl`. Para probar sobre un
 > contenedor propio, usa un **engagement de prueba local** (`engagements/*-selftest/`,
-> ignorado por git) como explica `skills/docker-evidence-collection`.
+> ignorado por git) como explica `steering/docker-evidence-collection.md`.
 
 ## Configuración
 

@@ -171,6 +171,45 @@ profesor pidió dejarlo para después).
   nombre real del contenedor** antes de cualquier acción que altere estado.
 - **23** → `docker-evidence-analysis` Paso 0.1 + plantilla de reporte (arriba).
 
+## Cuarta ronda — conversión al formato `POWER.md` (instalable en Kiro)
+
+El Power **no se instalaba** en Kiro con **Add Custom Power → Local Directory**: su
+formato original era `plugin.json` + `skills/<skill>/SKILL.md` (estilo
+agent-plugins.org), que ese instalador **no reconoce**. El cimiento `dfir-linux`
+**sí** se instala porque trae un `POWER.md` en la raíz y un directorio `steering/`.
+Se convirtió `docker-forensics` al **mismo formato**, sin cambiar los valores del
+contrato:
+
+24. **`POWER.md` en la raíz.** Nuevo `POWER.md` con el **mismo frontmatter que
+    `dfir-linux`** (`name`, `displayName`, `description`, `keywords`, `author`,
+    `x-ethack`) y el **bloque `x-ethack` tal cual del antiguo `plugin.json`** —
+    valores sin cambios: `kind: forensics`, `forensicsStage: Collect`
+    (`ecCouncilPhase: null`), `team`/`owner`, las 4 herramientas reales (`docker`,
+    `sha256sum`, `tar`, `grep`), `allowlistValidation.required: true`,
+    `producesActionLog: true`, los tres `Modo_Ejecucion` (default `script-kiddie`) y
+    el bloque `documentation`.
+25. **Skills → `steering/`.** Las tres skills se **movieron** a `steering/` (un `.md`
+    por guía, **contenido tal cual**): `docker-evidence-collection.md`,
+    `docker-evidence-analysis.md` y `docker-forensics-report.md`. Quedan listadas en
+    `POWER.md` y se cargan **bajo demanda** (como las guías de `dfir-linux`).
+26. **`plugin.json` y `skills/` eliminados.** El descubrimiento de Powers
+    (`catalog.discover_powers` / `power_adapter.find_power_dirs`) cuenta **por
+    directorio** el que tenga `plugin.json` **o** `POWER.md`, y `load_power` lee
+    `plugin.json` **antes** que `POWER.md`. Dejar ambos haría que el adaptador
+    ignorara el nuevo `POWER.md`; por eso se borró `plugin.json` (el `POWER.md` pasa
+    a ser el contrato autoritativo, con los mismos valores) y se borró `skills/` (su
+    contenido ya vive en `steering/`). El directorio conserva **un único marcador**
+    (`POWER.md`) → el Power se cataloga **una sola vez**.
+27. **`make validate` sigue en verde.** 10 Powers descubiertos, `docker-forensics`
+    contado una vez, ahora con `format: POWER.md`; el adaptador valida el mismo
+    `x-ethack` del frontmatter (herramientas no vacías, etapa forense sin fase
+    EC-Council, allowlist obligatoria, modos y documentación). `docStatus` sigue
+    completo (`prompt.md`, `sessions/`, `feedback.md` intactos).
+
+> Las sesiones de las rondas 1–3 y el `prompt.md` conservan, como registro
+> histórico, las referencias a `plugin.json` y a `skills/`: documentan cómo se
+> construyó el Power antes de esta conversión y no se reescriben.
+
 ## Pendientes / mejoras futuras
 
 - Validar las rutas de log sobre el `.tar` real del DVWA del laboratorio.
