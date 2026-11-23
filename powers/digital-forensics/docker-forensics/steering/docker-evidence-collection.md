@@ -210,6 +210,22 @@ cambia **dónde** corren los comandos y **a dónde** va su salida:
   stdin del script (p. ej. un heredoc) y lo **consume**, cortando el resto del script.
   `ssh -n` desconecta el stdin y lo evita.
 
+**Una sola orden de solo lectura por el salto** (confirmar el nombre con el `docker ps`
+del Paso 5, o un reconocimiento previo) no necesita el heredoc ni el agente: usa
+`ProxyCommand` + `-W`. El `ProxyCommand` corre en **tu puesto**, así que la clave
+tampoco sale de ahí y no toca la Kali:
+
+```bash
+KEY=/ruta/tu_clave.pem
+PROXY="ssh -i $KEY -o StrictHostKeyChecking=accept-new -W %h:%p kali@<KALI>"
+# p. ej. el docker ps de confirmación del nombre (Paso 5), en solo lectura:
+ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ProxyCommand="$PROXY" \
+    ec2-user@<HOST_DVWA> 'sudo docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}"'
+```
+
+**La colecta completa** (varios subcomandos + `export` en streaming) sí usa el agente
+(`ssh -A`) y el heredoc:
+
 ```bash
 # Desde tu puesto: agente con tu clave; master a la Kali con -A; se colecta EN la Kali.
 eval "$(ssh-agent -s)"; ssh-add /ruta/tu_clave.pem

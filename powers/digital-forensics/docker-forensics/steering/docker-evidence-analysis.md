@@ -48,6 +48,17 @@ que el del atacante; sin este filtro se atribuye por error una conexión propia 
 ataque. (Caso real: la IP del analista quedó marcada como "sonda de ataque" en un
 primer borrador.)
 
+**Excluye también las direcciones propias del objetivo** (dos casos que no son ni
+equipo ni atacante y que ensucian la atribución si se cuelan):
+
+- **La IP pública del propio host objetivo** (NAT *hairpin*). Al llegar al DVWA por su
+  IP pública, el tráfico puede entrar con *source-NAT* y figurar en el log con la **IP
+  pública del propio host** como origen. No es un atacante nuevo: es el mismo ataque
+  visto por la IP pública. Sácala del `scope.yaml` (`target_host`/`ec2_host`).
+- **La IP del contenedor en el bridge de Docker** (p. ej. `172.17.0.x`). El contenedor
+  se habla a sí mismo (setup, healthcheck); es tráfico interno. Sácala de
+  `02_docker_inspect.json` (`.NetworkSettings.IPAddress`), no la atribuyas.
+
 ```bash
 # Declara las IP conocidas (ajústalas a TU lab; incluye la privada de la Kali y las
 # públicas de analistas/prof/Blue Team). Documenta cada una con su dueño.
@@ -55,6 +66,23 @@ cat > "${WORK}/known_ips.txt" <<'IPS'
 10.50.0.68          # Kali (privada) — puesto del equipo
 # 203.0.113.10      # Mac del analista (ejemplo) — NO atacante
 IPS
+
+# Añade las DIRECCIONES PROPIAS DEL OBJETIVO (no son atacante). Define el asset si
+# vienes directo al análisis:
+: "${ASSET_ID:=dvwa-01}"; SCOPE="${ENG_DIR}/scope.yaml"
+#   1) IP pública/privada del host desde el scope.yaml (NAT hairpin)
+python3 -c 'import sys,yaml
+d=yaml.safe_load(open(sys.argv[1])) or {}
+a=[x for x in d.get("assets",[]) if x.get("id")==sys.argv[2]]
+a=a[0] if a else {}
+for k in ("target_host","target_hostname","ec2_host","ec2_hostname"):
+    v=a.get(k)
+    if v: print(f"{v}          # objetivo: {k} (NAT hairpin / propia) - NO atacante")' "$SCOPE" "$ASSET_ID" >> "${WORK}/known_ips.txt" 2>/dev/null
+#   2) IP del contenedor en el bridge Docker desde docker inspect
+python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))[0]
+ip=d.get("NetworkSettings",{}).get("IPAddress","")
+if ip: print(f"{ip}          # objetivo: IP del contenedor en el bridge Docker - trafico interno")' "${EVID_DIR}/02_docker_inspect.json" >> "${WORK}/known_ips.txt" 2>/dev/null
 
 # Cuenta accesos por IP y marca cuáles son conocidas (a excluir) y cuáles atribuir.
 grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' "${EVID_DIR}/04_docker_logs.txt" | sort | uniq -c | sort -rn \

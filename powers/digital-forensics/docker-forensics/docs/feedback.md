@@ -210,6 +210,36 @@ contrato:
 > histórico, las referencias a `plugin.json` y a `skills/`: documentan cómo se
 > construyó el Power antes de esta conversión y no se reescriben.
 
+## Quinta ronda — segundo caso real (re-ejecución, 2026-11-23, green-hat)
+
+Segunda pasada completa contra el contenedor real `dvwa` (10.50.0.34, por salto SSH a
+través de la Kali), ya con los correctivos 15-18 y 20-27 en las guías. Las seis
+correcciones pedidas se sostuvieron corriendo el Power al pie de la letra: recolección
+remota (`ssh -A`/`ssh -n`, export en streaming), guardia de alcance + ventana en un
+solo bloque, confirmación del nombre con `docker ps`, nota de recolección en caliente
+en la custodia, exclusión de IP conocidas y cruce de logs agnóstico al método
+(232 vs 232, `comm -23` vacío; captura OPTIONS/PROPFIND/NKFY del escaneo Nmap NSE). Dos
+huecos nuevos encontrados y cerrados:
+
+28. **El Paso 0.1 no excluía las direcciones propias del objetivo.** Dos IP "a
+    atribuir" no eran ni equipo ni atacante: `3.237.81.237` (la **IP pública del propio
+    host DVWA**, tráfico de ataque que entra por la IP pública con **NAT hairpin**) y
+    `172.17.0.2` (la **IP del contenedor en el bridge Docker**, tráfico interno). El
+    Power listaba Kali/analistas/prof/Blue Team/escáneres, pero no las direcciones
+    propias del objetivo. Añadido al Paso 0.1 de `docker-evidence-analysis`: se derivan
+    del `scope.yaml` (`target_host`/`ec2_host`) y de `docker inspect`
+    (`.NetworkSettings.IPAddress`) y se excluyen antes de atribuir.
+29. **La sección remota solo daba el bloque de colecta completa.** Para una **orden
+    única de solo lectura** por el salto (el `docker ps` del Paso 5, un reconocimiento
+    previo) había que armar la invocación a mano. Añadida la forma con
+    `ProxyCommand` + `-W` (sin heredoc ni agente; la clave corre en el puesto del
+    analista), junto al bloque de colecta completa con `ssh -A`.
+
+Corrección de un entregable del caso: en el reporte local, `<IP-analista>` se
+reclasificó de "sin atribuir" a **IP conocida del analista (excluida)**, como el propio
+analista confirmó. `189.216.118.104` (1 petición) queda como "sin atribuir, confianza
+baja".
+
 ## Pendientes / mejoras futuras
 
 - Validar las rutas de log sobre el `.tar` real del DVWA del laboratorio.
