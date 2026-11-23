@@ -84,6 +84,93 @@ alcance**:
 14. **`find -empty` con exclusiones.** Se descartan los vacíos por diseño: `btmp`,
     `wtmp`, `lastlog`, `faillog`, `tallylog`, `other_vhosts_access.log`.
 
+## Tercera ronda — primer caso REAL (DVWA del lab, 2026-11-23, modo green-hat)
+
+Primera pasada contra el contenedor real `dvwa` en AWS (`10.50.0.34`), no un
+self-test. Resultado: ataque reconstruido de punta a punta (SQLi UNION con volcado de
+`users`, inyección de comandos, 3 webshells, y **borrado de huellas** vía
+`cleanup.php`), integridad `hash_pre == hash_post`, cadena de 11 eslabones íntegra.
+Lo que el Power **no cubría** para este caso real:
+
+15. **Docker remoto, no local.** El Power asume `docker` en la máquina local y la
+    evidencia escrita en el repo. En el caso real `docker` corre en un **host EC2
+    remoto**, alcanzable **solo** por salto SSH a través de la Kali. Falta una guía de
+    **recolección remota**: salto SSH / reenvío de agente (la clave privada no debe
+    salir del puesto del analista), **streaming del `export` host→Kali** para no
+    escribir en el host objetivo, y la trampa de que un `ssh ... 'cmd'` dentro de un
+    heredoc **consume el stdin** del script (se corrige con `ssh -n`). Hoy el analista
+    tuvo que improvisar todo esto; debería ser un modo documentado del Power.
+16. **El cruce antiforense solo matchea `GET|POST|HEAD|PUT`.** El `grep` del Paso 4.1
+    excluye `OPTIONS`, `PROPFIND` y métodos exóticos (p. ej. los de un escaneo Nmap
+    NSE), lo que produjo un **falso positivo de "18 líneas borradas"** que en realidad
+    estaban en ambas fuentes. Debe normalizarse con un patrón agnóstico al método
+    (`\] "[A-Z]+ `) o comparar solo la parte de la petición.
+17. **Archivo creado-y-borrado dentro de la vida del contenedor = invisible.** El
+    hallazgo estrella de borrado de huellas (`test_shell.php`) **no** aparece en el
+    `.tar` **ni** en `docker diff` (no deja `A` ni `D`, porque nunca estuvo en la
+    imagen base y se borró antes del export). El Power enseña a recuperar **líneas de
+    log** borradas, pero no advierte este caso de **fichero** borrado que solo
+    sobrevive en `docker logs`/`error.log`. Debe decirlo explícitamente.
+18. **La advertencia de mtimes está exagerada para `docker export`.** En el caso real
+    el `.tar` **sí** conservó los mtime y coincidieron con la cronología de los logs
+    (uploads 04:01/04:04/04:06). El límite real es la historia de capas, no los mtime;
+    conviene matizar el Paso 4 para no descartar una pista válida.
+19. **Fuente de log externa (CloudWatch) como referencia infalsificable.** El profesor
+    pidió cotejar con `/ethack-lab/dvwa` en CloudWatch (que la Red Team no puede
+    borrar). El Power solo la menciona en "remediación", no como **paso de análisis**.
+    Falta una guía para traer una fuente externa (CloudWatch Logs, `aws logs
+    get-log-events`) y diferenciarla contra los logs del contenedor. (En esta pasada
+    no fue posible: la Kali no tenía rol IAM ni perfil AWS.)
+20. **La guardia de alcance no valida la ventana temporal.** El check del Power
+    confirma allowlist + `host_is_target`, pero **no** `authorized_window`; hubo que
+    verificarla aparte. Debería integrarse en la misma guardia.
+21. **Aislamiento "ninguno" como caso de primera clase.** El Power ofrece `pause`
+    (defecto) o `disconnect`; el caso real fue **sin aislamiento** por ser un lab
+    **compartido/producción**. Falta ese tercer camino explícito ("recolectar en
+    caliente, sin aislar") con su nota de custodia obligatoria.
+22. **Confirmar el nombre real del contenedor antes de operar.** `container_id` en el
+    `scope.yaml` traía un nombre sintético (`dvwa-ec2-i-...`); el nombre real era
+    `dvwa`. El Power deriva `CONTAINER` del scope y (en el flujo normal) lo **pausa**:
+    si el nombre está mal, se pausaría el contenedor equivocado. Debe exigir un
+    `docker ps` de confirmación del nombre **antes** de cualquier acción que altere
+    estado.
+23. **Excluir las IP conocidas del lab ANTES de atribuir (hueco encontrado por el
+    analista).** El primer borrador del reporte clasificó `<IP-analista>` como sonda
+    de ataque cuando era el **Mac del analista**. El Power no decía nada sobre separar
+    el ruido propio del lab del tráfico del atacante. Debe añadir, al inicio del
+    análisis, una **lista de IP conocidas** (Kali, Mac/estaciones de analistas, prof,
+    Blue Team, escáneres autorizados) y **excluirlas de los IoC**, dejándolo explícito
+    en el reporte. Sin ese paso, cualquier conexión legítima del equipo contamina la
+    atribución y los indicadores. Añadido el **Paso 0.1** en `docker-evidence-analysis`
+    y una fila "IP conocidas (excluidas)" en la plantilla de `docker-forensics-report`.
+
+## Correcciones aplicadas al Power tras el caso real (ronda 3)
+
+Los huecos **15-18 y 20-23** se **cerraron** en los skills tras el caso real; el
+**19 (CloudWatch como paso de análisis)** se deja **pendiente a propósito** (el
+profesor pidió dejarlo para después).
+
+- **15** → `docker-evidence-collection`: nueva sección "Recolección remota (Docker en
+  host EC2 por salto SSH)" con reenvío de agente (la clave no sale del puesto del
+  analista), `ssh -n` para no consumir el stdin del script, y `docker export` en
+  **streaming host→Kali** sin escribir en el host objetivo.
+- **16** → `docker-evidence-analysis` Paso 4.1: el `grep` del cruce ahora es agnóstico
+  al método (`\] "[A-Z]+ `), no solo `GET|POST|HEAD|PUT`.
+- **17** → `docker-evidence-analysis` Paso 4.2: nota de que un **archivo creado y
+  borrado** dentro de la vida del contenedor no deja `A` ni `D` en `docker diff` ni
+  aparece en el `.tar`; solo se recupera por `docker logs`/`error.log`.
+- **18** → `docker-evidence-analysis` Paso 4: matizada la advertencia de mtimes
+  (`docker export` **sí** guarda mtimes en el tar; el límite real es la historia de
+  capas). Mtimes coherentes = corroboración válida.
+- **20** → `docker-evidence-collection` Paso 4: la guardia de alcance ahora **también
+  valida `authorized_window`** (aborta fuera de ventana).
+- **21** → `docker-evidence-collection` Paso 1: **recolección en caliente sin aislar**
+  como tercer camino de primera clase (lab compartido/producción), con su nota de
+  custodia obligatoria.
+- **22** → `docker-evidence-collection` Paso 4: exige `docker ps` para **confirmar el
+  nombre real del contenedor** antes de cualquier acción que altere estado.
+- **23** → `docker-evidence-analysis` Paso 0.1 + plantilla de reporte (arriba).
+
 ## Pendientes / mejoras futuras
 
 - Validar las rutas de log sobre el `.tar` real del DVWA del laboratorio.

@@ -82,21 +82,46 @@ false`). Esta comprobación **falla y detiene** si el asset no está en `scope.y
 si declara el host como objetivo, de modo que **no se contornea el alcance**:
 
 ```bash
-python3 -c 'import sys,yaml
+python3 -c 'import sys,yaml,datetime
 d=yaml.safe_load(open(sys.argv[1])) or {}
 aid=sys.argv[2]
 a=[x for x in d.get("assets",[]) if x.get("id")==aid]
 assert a, f"FUERA DE ALCANCE: asset {aid} no está en scope.yaml"
 a=a[0]
 assert a.get("host_is_target") is False, "host_is_target debe ser false (objetivo = contenedor, no host)"
-print("EN ALCANCE:", aid, "-> contenedor", a.get("container_id"))' "$SCOPE" "$ASSET_ID" \
-  || { echo "Detente: objetivo fuera de la Allowlist_Objetivos."; exit 1; }
+# Ventana autorizada (Req 11.6): fuera de ella NO hay actividad.
+w=d.get("authorized_window") or {}
+now=datetime.datetime.now(datetime.timezone.utc)
+s=datetime.datetime.fromisoformat(str(w.get("start","")).replace("Z","+00:00"))
+e=datetime.datetime.fromisoformat(str(w.get("end","")).replace("Z","+00:00"))
+assert s<=now<=e, "FUERA DE VENTANA AUTORIZADA (authorized_window): revisa scope.yaml"
+print("EN ALCANCE y EN VENTANA:", aid, "-> contenedor", a.get("container_id"))' "$SCOPE" "$ASSET_ID" \
+  || { echo "Detente: fuera de la Allowlist_Objetivos o de la ventana autorizada."; exit 1; }
 ```
+
+> **La guardia valida alcance Y ventana.** Además del asset y `host_is_target: false`,
+> comprueba `authorized_window`: si estás fuera de la ventana del engagement, aborta.
+> No operes fuera de ventana aunque el objetivo esté en la allowlist.
 
 > **El scope no se salta.** Si vas a trabajar contra un contenedor de **prueba** (p. ej.
 > `test-dvwa`), no edites comandos ni te saltes esta comprobación: decláralo en un
 > **engagement de prueba local** (sección siguiente) para que la validación pase con
 > normalidad.
+
+### 5. Confirmar el nombre REAL del contenedor (`docker ps`, antes de tocar estado)
+
+`CONTAINER` viene del `scope.yaml`, pero ese campo puede traer un nombre **sintético o
+desactualizado** (caso real: `scope.yaml` decía `dvwa-ec2-i-…` cuando el nombre real
+era `dvwa`). **Antes** de cualquier acción que altere estado —sobre todo
+`docker pause`— confirma que el nombre existe de verdad en el host objetivo; si no,
+pausarías el contenedor equivocado (o producción):
+
+```bash
+# en el host donde corre Docker (local, o por el salto SSH de la sección remota):
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}' \
+  | grep -E "(^|[[:space:]])${CONTAINER}([[:space:]]|$)" \
+  || { echo "ERROR: contenedor '${CONTAINER}' no corre aquí; revisa scope.yaml y 'docker ps -a'"; exit 1; }
+```
 
 ## Engagement de prueba local (self-test, sin commit)
 
@@ -154,10 +179,56 @@ es justo la que `docker inspect` debería recoger. Si el IM lo ordena, captura
 docker network disconnect <red> ${CONTAINER}   # <red>: el nombre que muestre docker inspect
 ```
 
+**Tercer caso: recolección EN CALIENTE, sin aislar.** Si el contenedor está en un
+**laboratorio compartido o en un entorno tipo producción** donde pausarlo o
+desconectarlo afectaría a otras equipas o al servicio, el Incident Manager puede
+decidir **no aislar** y recolectar sobre el contenedor vivo. Los cinco subcomandos de
+recolección son observación de solo lectura y **no modifican** el contenedor, así que
+la recolección en caliente es válida; lo que se pierde es la garantía de que el estado
+no cambie **durante** la captura. Deja constancia **obligatoria** en la Cadena_Custodia
+de que se recolectó en caliente, sin `pause`, y por qué (caso real: lab compartido por
+otras equipas, decisión del Incident Manager/profesor).
+
 - **Nunca** `docker stop` ni `docker kill` para aislar: terminan los procesos y
   **pierden el estado volátil** (RFC 3227). Solo se detiene el contenedor si el
   Incident Manager lo ordena y **después** de recolectar.
-- Anota en la Cadena_Custodia la decisión de aislamiento y quién la tomó.
+- Anota en la Cadena_Custodia la decisión de aislamiento (o la de **no** aislar) y quién
+  la tomó.
+
+## Recolección remota (Docker en un host EC2 por salto SSH)
+
+El caso de laboratorio puede tener el demonio Docker **en un host EC2 remoto**,
+alcanzable solo por **salto SSH a través de la Kali**. La metodología no cambia; solo
+cambia **dónde** corren los comandos y **a dónde** va su salida:
+
+- **La clave privada no sale de tu puesto.** Usa **reenvío de agente** (`ssh -A`) para
+  que el salto Kali→host use tu clave sin copiarla a la Kali.
+- **No escribas en el host objetivo.** Redirige la salida de cada subcomando a la Kali
+  (o a tu puesto); el `docker export` va en **streaming** host→Kali, sin dejar el
+  `.tar` en el disco del host.
+- **`ssh -n` en los saltos internos.** Un `ssh … 'cmd'` dentro de un script hereda el
+  stdin del script (p. ej. un heredoc) y lo **consume**, cortando el resto del script.
+  `ssh -n` desconecta el stdin y lo evita.
+
+```bash
+# Desde tu puesto: agente con tu clave; master a la Kali con -A; se colecta EN la Kali.
+eval "$(ssh-agent -s)"; ssh-add /ruta/tu_clave.pem
+ssh -A kali@<KALI> 'bash -s' <<'REMOTE'
+  set -e
+  EVID=~/forensics/docker-forensics-$(date -u +%Y%m%dT%H%M%SZ)/evidence; mkdir -p "$EVID"
+  H="ssh -n -o StrictHostKeyChecking=accept-new ec2-user@<HOST_DVWA>"   # -n: no consumir el heredoc
+  $H 'sudo docker top <CONTAINER> auxww'          > "$EVID/01_docker_top.txt"
+  $H 'sudo docker inspect <CONTAINER>'            > "$EVID/02_docker_inspect.json"
+  $H 'sudo docker diff <CONTAINER>'               > "$EVID/03_docker_diff.txt"
+  $H 'sudo docker logs --timestamps <CONTAINER>'  > "$EVID/04_docker_logs.txt" 2>&1
+  $H 'sudo docker export <CONTAINER>'             > "$EVID/05_docker_export.tar"   # streaming host->Kali
+  ( cd "$EVID" && sha256sum 0*_* > SHA256SUMS && sha256sum -c SHA256SUMS )
+REMOTE
+ssh-agent -k
+```
+
+El resto del skill (hashes, Cadena_Custodia, análisis) es idéntico. La evidencia pesada
+queda **en la Kali**, fuera del repositorio.
 
 ## Paso 2 — Collect: recolectar en Orden_Volatilidad (RFC 3227)
 

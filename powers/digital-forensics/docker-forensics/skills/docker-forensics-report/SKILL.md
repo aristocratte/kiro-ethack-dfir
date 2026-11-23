@@ -20,6 +20,9 @@ de la Cadena_Custodia.
   contenedor autorizado en `scope.yaml`, sin `docker exec` y sin tocar el host.
 - **Objetividad.** Separa hecho (lo que muestra la evidencia) de interpretación
   (hipótesis), con nivel de confianza.
+- **Atribución limpia.** Antes de listar IoC, declara y **excluye** las IP conocidas
+  del lab (Kali, estaciones de analistas, prof, Blue Team, escáneres autorizados). Una
+  IP del equipo **nunca** es un IoC (ver `docker-evidence-analysis` Paso 0.1).
 
 ## Plantilla (rellenar y guardar como `reporte-docker-forensics.md`)
 
@@ -52,7 +55,8 @@ de la Cadena_Custodia.
 | <ts> | <borrado de access.log / historial> | 03_docker_diff.txt (D) · <sha> | T1070.002/003 |
 
 ## 4. Indicadores de compromiso (IoC)
-- IP de origen: <10.50.0.248, …>
+- **IP conocidas del lab (EXCLUIDAS de IoC):** <Kali, Mac/estación del analista, prof, Blue Team — con su dueño>. Se separan ANTES de atribuir (Paso 0.1); una IP del equipo no es IoC.
+- IP de origen (atacante): <10.50.0.248, …>
 - Archivos maliciosos / artefactos: <ruta — sha256>
   - <var/www/html/hackable/uploads/cmd.php — <sha256>>
 - Hashes de evidencia (de SHA256SUMS): <lista archivo → sha256>

@@ -38,6 +38,37 @@ export ROOT="${WORK}/rootfs"
 Al terminar todo el análisis, repetir `sha256sum -c SHA256SUMS` (hash_post) y
 comprobar que coincide con el inicial.
 
+## Paso 0.1 — Lista de IP conocidas del lab (excluir ANTES de atribuir)
+
+Antes de clasificar cualquier origen como IoC, arma la **lista de IP conocidas** del
+Entorno_Laboratorio y **exclúyelas** de la atribución: la Kali del equipo, las
+estaciones de los analistas (tu propio Mac/portátil), el profesor, el Blue Team y los
+escáneres autorizados. El tráfico legítimo del equipo aparece en **los mismos logs**
+que el del atacante; sin este filtro se atribuye por error una conexión propia como
+ataque. (Caso real: la IP del analista quedó marcada como "sonda de ataque" en un
+primer borrador.)
+
+```bash
+# Declara las IP conocidas (ajústalas a TU lab; incluye la privada de la Kali y las
+# públicas de analistas/prof/Blue Team). Documenta cada una con su dueño.
+cat > "${WORK}/known_ips.txt" <<'IPS'
+10.50.0.68          # Kali (privada) — puesto del equipo
+# 203.0.113.10      # Mac del analista (ejemplo) — NO atacante
+IPS
+
+# Cuenta accesos por IP y marca cuáles son conocidas (a excluir) y cuáles atribuir.
+grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' "${EVID_DIR}/04_docker_logs.txt" | sort | uniq -c | sort -rn \
+  | while read -r n ip; do
+      if grep -qE "(^|[^0-9.])${ip}([^0-9.]|$)" "${WORK}/known_ips.txt"; then estado="CONOCIDA (excluir)"; else estado="a atribuir"; fi
+      printf '%8s  %-15s  %s\n' "$n" "$ip" "$estado"
+    done
+```
+
+Una IP **conocida no va a los IoC**. En el reporte, lista aparte las IP conocidas
+excluidas (con su dueño) y las IP de origen del atacante. Si una IP no está en la lista
+y solo hace una o dos peticiones benignas, trátala como **sin atribuir** (confianza
+baja), no como ataque.
+
 ## Paso 1 — Partir de lo que señaló `docker diff` (A / C / D)
 
 `docker diff` marca cada ruta cambiada respecto a la imagen base. Es el mapa de por
@@ -201,9 +232,12 @@ borrado e incluso **recupera la línea eliminada**:
 ```bash
 ACC="${ROOT}/var/log/apache2/access.log"      # ajusta a la ruta descubierta en el Paso 2
 
-# normaliza las peticiones de cada fuente (quita el prefijo de tiempo que añade docker logs)
-grep -E '"(GET|POST|HEAD|PUT)' "${EVID_DIR}/04_docker_logs.txt" | sed -E 's/^[0-9T:.Z+-]+ //' | sort > /tmp/_fromlogs.txt
-sort "$ACC" 2>/dev/null > /tmp/_fromfile.txt
+# normaliza las peticiones de cada fuente (quita el prefijo de tiempo que añade docker logs).
+# OJO: el patrón es AGNÓSTICO al método (`\] "<METODO> `): NO lo limites a GET|POST|HEAD|PUT,
+# o perderás OPTIONS, PROPFIND y los métodos raros de un escáner (p. ej. Nmap NSE) y verás
+# un "borrado" falso. Usa una clase de método genérica `[A-Z]+`.
+grep -E '\] "[A-Z]+ ' "${EVID_DIR}/04_docker_logs.txt" | sed -E 's/^[0-9T:.Z+-]+ //' | sort > /tmp/_fromlogs.txt
+grep -E '\] "[A-Z]+ ' "$ACC" 2>/dev/null | sort > /tmp/_fromfile.txt
 
 echo "accesos en docker logs: $(wc -l < /tmp/_fromlogs.txt)   en el archivo: $(wc -l < /tmp/_fromfile.txt)"
 echo "--- líneas presentes en docker logs pero AUSENTES del archivo (= borradas) ---"
@@ -237,13 +271,24 @@ readlink "${ROOT}/root/.bash_history" 2>/dev/null # ¿apunta a /dev/null?
 grep '^D ' "${EVID_DIR}/03_docker_diff.txt"
 ```
 
-> **Límite de `docker export` con los mtime (timestomping, T1070.006).** `docker
-> export` aplana el filesystem y **no conserva de forma fiable las marcas de tiempo**
-> ni la historia de capas, así que un `find -newermt` sobre la copia **no prueba**
-> alteración de fechas: trátalo como indicio débil, no como evidencia. Para
-> timestomping apóyate en fuentes más fiables —las marcas de `docker logs`, el
-> `Created`/`StartedAt` de `docker inspect` y la correlación entre fuentes (4.1)—, no
-> en el mtime del `.tar`.
+> **Archivo creado Y borrado dentro de la vida del contenedor = invisible.** Un fichero
+> que el atacante sube y luego elimina **antes del `export`** (p. ej. una webshell de
+> prueba borrada con un `cleanup.php`) **no deja rastro**: no está en el `.tar`, y
+> `docker diff` **no** lo marca ni `A` ni `D` (nunca estuvo en la imagen base y ya no
+> existe al exportar). Por eso un `diff` con `0 D` **no** significa "sin borrado". La
+> única forma de recuperarlo es **cruzar con `docker logs`/`error.log`**: un `GET` con
+> `200` seguido de un `404` al mismo recurso, o un error "script ... not found", delata
+> el archivo borrado (T1070.004). Es otra razón para recolectar `docker logs` antes del
+> export.
+
+> **Mtimes en `docker export` (timestomping, T1070.006) — matiz.** El `.tar` de
+> `docker export` **sí** conserva los mtime de los archivos (van en la cabecera del
+> tar), y cuando **coinciden** con la cronología de los logs son una **corroboración
+> válida** (caso real: los mtime de las webshells cuadraron con los `POST /upload`). Lo
+> que el export **no** conserva es la **historia de capas** ni atime/ctime, así que el
+> mtime por sí solo **no prueba** timestomping: un mtime que **no cuadra** con los logs
+> es sospechoso, pero confírmalo con fuentes más fiables —`docker logs`, el
+> `Created`/`StartedAt` de `docker inspect` y la correlación entre fuentes (4.1)—.
 
 Un `access.log` cuyo rango temporal **no** cubre el ataque que sí aparece en otras
 evidencias, **una línea presente en `docker logs` y ausente del archivo**, un
