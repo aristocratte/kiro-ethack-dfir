@@ -52,7 +52,7 @@ AGENTS = [
     ("ethack-covering-tracks",     "agents/fases/covering-tracks.md",     []),
     ("ethack-red-team",            "agents/roles/red-team.md",            []),
     ("ethack-blue-team",           "agents/roles/blue-team.md",           []),
-    ("ethack-digital-forensics",   "agents/roles/digital-forensics.md",   ["dfir-linux", "network-forensics"]),
+    ("ethack-digital-forensics",   "agents/roles/digital-forensics.md",   ["dfir-linux", "network-forensics", "docker-forensics"]),
     ("ethack-incident-responder",  "agents/roles/incident-responder.md",  ["incident-handling-nist", "incident-response-lab"]),
     ("ethack-grc",                 "agents/roles/grc.md",                 ["grc-nist-csf"]),
 ]
