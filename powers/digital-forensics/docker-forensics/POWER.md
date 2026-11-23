@@ -80,6 +80,14 @@ el agente puede seguir en un laboratorio autorizado:
 - **Recolección remota** (Docker en un host EC2 por salto SSH) sin que la clave privada ni la
   evidencia salgan del puesto del analista.
 
+> **Límite del Power.** El análisis se apoya en `access.log`/`docker logs`, que **no** contienen
+> los **cuerpos POST** (credenciales, mensaje del guestbook, formularios), **ni las cookies** (robo
+> o reutilización de `PHPSESSID`), **ni lo que ocurre en el navegador** (XSS DOM, CSP Bypass,
+> JavaScript). Para esos vectores hace falta **otra fuente**: captura de red, logs externos
+> (**CloudWatch**) o leer la **base de datos** del export con un motor jetable (Paso 3.1 del
+> análisis). El access.log sí distingue login correcto de fallido por el **tamaño de respuesta**
+> (`%b`) cuando el código es siempre 200.
+
 > **Encuadre:** material didáctico para laboratorios autorizados o equipos propios. El power no
 > concede autorización por sí mismo: el contenedor objetivo debe estar en `scope.yaml`. Deriva del
 > cimiento `dfir-linux` (forense de host): el análisis del sistema de archivos reutiliza esa

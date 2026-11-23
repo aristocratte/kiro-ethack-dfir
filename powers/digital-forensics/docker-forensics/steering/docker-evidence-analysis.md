@@ -1,6 +1,6 @@
 ---
 name: docker-evidence-analysis
-description: Análisis forense en SOLO LECTURA del .tar exportado de un contenedor Docker comprometido. Parte de docker diff (A/C/D) filtrando el ruido del runtime, descubre dónde loguea Apache (y maneja access.log → /dev/stdout), revisa access.log/error.log buscando XSS, SQLi, inyección de comandos, webshell y escáneres, examina .bash_history, /etc/passwd, cron, /tmp y archivos, y detecta borrado de huellas CRUZANDO docker logs con el access.log del .tar (recupera líneas eliminadas), más logs truncados e historial vacío. Explica el límite de los mtime en exports. Cada hallazgo lleva su evidencia y su técnica MITRE ATT&CK. Cubre la etapa Analyze.
+description: Análisis forense en SOLO LECTURA del .tar exportado de un contenedor Docker comprometido. Parte de docker diff (A/C/D) filtrando el ruido del runtime, descubre dónde loguea Apache (y maneja access.log → /dev/stdout), revisa access.log/error.log buscando XSS, SQLi, inyección de comandos, webshell y escáneres, distingue login exitoso de fallido por el tamaño de respuesta (%b del combined), examina .bash_history, /etc/passwd, cron, /tmp y archivos, lee el contenido en base de datos (guestbook/users) arrancando un MySQL/MariaDB jetable sobre una copia del datadir (nunca el contenedor), y detecta borrado de huellas CRUZANDO docker logs con el access.log del .tar (recupera líneas eliminadas), más logs truncados e historial vacío. Explica el límite de los mtime en exports y que access.log no contiene cuerpos POST, cookies ni fallos de cliente (hace falta captura de red o CloudWatch). Cada hallazgo lleva su evidencia y su técnica MITRE ATT&CK. Cubre la etapa Analyze.
 ---
 
 # docker-evidence-analysis — Analizar el `.tar` en solo lectura
@@ -47,6 +47,17 @@ escáneres autorizados. El tráfico legítimo del equipo aparece en **los mismos
 que el del atacante; sin este filtro se atribuye por error una conexión propia como
 ataque. (Caso real: la IP del analista quedó marcada como "sonda de ataque" en un
 primer borrador.)
+
+**Pregunta por TODAS las IP que usó el equipo durante el periodo que cubren los logs,
+no solo la IP de hoy.** Un analista puede haberse conectado desde varias direcciones a
+lo largo de los días de la captura (casa, VPN, oficina, datos móviles) y cada una
+aparece como un origen distinto. Antes de atribuir, **mira el rango temporal del log**
+(`head`/`tail` del access.log y las fechas de `04_docker_logs.txt`) y **pregunta al
+humano qué IP usó cada analista/el prof/el Blue Team en ESAS fechas**; añádelas todas a
+`known_ips.txt` con su dueño y su periodo. No basta con `curl ifconfig.me` del momento:
+una IP propia de hace tres días, si no se declara, se atribuye por error al atacante.
+(Caso real: `<IP-analista>`, usada por el analista el 19–20/11, se tomó al principio
+por Red Team hasta que el analista confirmó que era suya.)
 
 **Excluye también las direcciones propias del objetivo** (dos casos que no son ni
 equipo ni atacante y que ensucian la atribución si se cuelan):
@@ -200,6 +211,18 @@ grep -Ei '[?&](cmd|exec|command|shell|c|run|exe|arg|op|do)=' "$ACC"
 # Escáneres / herramientas automáticas (T1595 / T1046) por User-Agent y patrón
 grep -Ei "nikto|sqlmap|nmap|masscan|dirb|gobuster|wfuzz|feroxbuster|hydra" "$ACC"
 
+# Fuerza bruta / credential stuffing (T1110): cuando el login responde SIEMPRE 200
+# (misma página en éxito y fallo, como el módulo Brute Force de DVWA), el CÓDIGO no
+# distingue. Usa el TAMAÑO de respuesta — %b del combined, el número tras el código —
+# para separar acierto de fallo: el login correcto devuelve otra página (mensaje de
+# bienvenida vs "incorrect") y, por tanto, OTRO tamaño. Agrupa por endpoint:
+grep -oE '"GET /vulnerabilities/brute/\?[^"]+" [0-9]{3} [0-9]+' "$ACC" \
+  | sed -E 's/&Login=Login//; s/&user_token=[a-f0-9]+//' | sort -u
+#   El/los tamaño(s) ATÍPICOS frente al montón de fallos = las credenciales que
+#   ACERTARON. (Caso real DVWA, security=low: fallos = 4647 B; admin:password = 4685 B
+#   y gordonb:abc123 = 4689 B saltaron a la vista; la sonda Nmap NSE dio 302/306.)
+#   El mismo truco vale para cualquier login que siempre responda 200: compara %b.
+
 # error.log: errores de PHP/SQL que delatan explotación en curso
 grep -Ei "error|warning|sql syntax|undefined|allowed memory|system\(|exec\(" "$ERR"
 ```
@@ -207,6 +230,20 @@ grep -Ei "error|warning|sql syntax|undefined|allowed memory|system\(|exec\(" "$E
 Para cada coincidencia anota: **IP de origen, fecha/hora, método+URL, User-Agent y
 código de respuesta**. Un `200`/`302` tras un payload sugiere éxito; un `403`/`404`
 sugiere intento fallido.
+
+> **Límite de `access.log` (qué NO verás ahí).** El log *combined* registra la **línea
+> de petición** (método + URL + protocolo), el código, el tamaño (`%b`), el `Referer` y
+> el `User-Agent`. **No** registra el **cuerpo de las peticiones POST** (credenciales de
+> `login.php`, el mensaje del guestbook del XSS almacenado, `password_new` de Insecure
+> CAPTCHA, el `token`/`phrase` del reto de JavaScript), **ni las cookies** (robo o
+> reutilización de `PHPSESSID`, secuestro de sesión), **ni nada que ocurra solo en el
+> navegador** (XSS DOM, CSP Bypass, ejecución de JavaScript). Para esos vectores el
+> access.log solo prueba que *se tocó el endpoint*, no *qué* se envió ni *qué* pasó en
+> el cliente. Hace falta **otra fuente**: una **captura de red** (payloads POST y
+> cookies en claro si es HTTP), logs externos infalsificables (**CloudWatch**
+> `/ethack-lab/dvwa`), el **contenido en base de datos** (Paso 3.1) o la telemetría del
+> propio navegador. Decláralo como límite en el reporte para no concluir "no pasó nada"
+> cuando en realidad la evidencia vive fuera del access.log.
 
 ## Paso 3 — Artefactos del sistema de archivos
 
@@ -241,6 +278,63 @@ find "${ROOT}" -xdev -type f -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null \
 
 Correlaciona estos artefactos con las IP y horas de los logs de Apache para armar la
 cronología.
+
+## Paso 3.1 — Contenido en base de datos (MySQL/MariaDB) desde el export
+
+Lo que la app guarda en su **base de datos** (comentarios del guestbook del XSS
+almacenado, usuarios y hashes, registros manipulados) **no está en `access.log`** —el
+payload viaja en el cuerpo POST— **ni se recupera con `strings`** sobre los `.ibd`:
+InnoDB mantiene las filas en páginas bufferadas/opacas y en el *redo log*, no en texto
+plano. (Caso real: `strings guestbook.ibd` e `ibdata1` **no** encontraron el comentario
+`KIRO-POC`.) Para leerlo hay que **montar el datadir en un motor**.
+
+**La regla no cambia: nunca contra el contenedor víctima.** Arranca un
+**MySQL/MariaDB JETABLE** sobre una **copia** de `/var/lib/mysql` extraída del `.tar`,
+con la **misma versión** del datadir y **sin credenciales** (`--skip-grant-tables`), y
+destrúyelo al terminar. El `.tar` y sus `sha256` originales no se tocan.
+
+```bash
+MYSRC="${ROOT}/var/lib/mysql"
+[ -d "$MYSRC" ] || echo "este export no trae /var/lib/mysql"
+# Versión del datadir -> elige la imagen que COINCIDA (si no, InnoDB puede no montar):
+cat "$MYSRC"/debian-*.flag 2>/dev/null; cat "$MYSRC/mysql_upgrade_info" 2>/dev/null
+#   p. ej. "10.1.26-MariaDB" -> mariadb:10.1 ; "5.7.x" -> mysql:5.7
+
+# 1) COPIA escribible y desechable (la evidencia original queda intacta)
+COPY="$(mktemp -d)/mysql"; mkdir -p "$COPY"; cp -a "$MYSRC/." "$COPY/"
+
+# 2) Instancia JETABLE: misma versión, sin red, sin grants, socket en el datadir.
+#    --user al dueño de los ficheros del datadir (evita problemas de permisos).
+docker run -d --rm --name df_db_ro --platform linux/amd64 \
+  --user "$(stat -c %u "$MYSRC" 2>/dev/null || echo 101)" \
+  -v "$COPY":/var/lib/mysql --entrypoint mysqld mariadb:10.1 \
+  --skip-grant-tables --skip-networking --socket=/var/lib/mysql/ro.sock
+for i in $(seq 1 60); do \
+  docker exec df_db_ro mysqladmin --socket=/var/lib/mysql/ro.sock ping >/dev/null 2>&1 && break; sleep 1; done
+
+# 3) Leer lo que NO está en los logs (ajusta BD/tablas a tu app)
+Q(){ docker exec df_db_ro mysql --socket=/var/lib/mysql/ro.sock -N -e "$1"; }
+Q "SHOW DATABASES;"
+Q "SELECT comment_id,name,comment FROM dvwa.guestbook;"   # XSS almacenado (T1059.007)
+Q "SELECT user,password FROM dvwa.users;"                 # hashes (corrobora el brute force)
+
+# 4) DESTRUIR instancia y copia
+docker rm -f df_db_ro >/dev/null 2>&1; rm -rf "$(dirname "$COPY")"
+```
+
+> **Si no hay motor ni Docker donde estás, DÍSELO AL HUMANO ANTES DE INSTALAR NADA.**
+> Caso real: la Kali del equipo solo tenía los **clientes** `mysql`/`mariadb`, no un
+> servidor, y no tenía Docker; montar la instancia allí habría exigido instalar
+> paquetes. La alternativa limpia fue hacerlo **en el puesto del analista** (Docker
+> local), trayendo una **copia** del datadir (≈110 MB) por el mismo salto SSH. El
+> `--skip-grant-tables` evita tener que conocer la contraseña de la BD y mantiene el
+> acceso de **solo lectura lógica**. Registra en la Cadena_Custodia que se leyó la BD
+> sobre una copia, con qué imagen/versión y que la instancia se destruyó.
+
+Mapea cada fila relevante a su técnica: el comentario con `<script>` del guestbook es la
+prueba del **XSS almacenado** (T1059.007) que el access.log no mostraba; los hashes de
+`users` son material de **credenciales** (T1552.001 / referencia para validar un
+T1110 de fuerza bruta).
 
 ## Paso 4 — ¿La Red Team borró sus huellas? (anti-forense)
 

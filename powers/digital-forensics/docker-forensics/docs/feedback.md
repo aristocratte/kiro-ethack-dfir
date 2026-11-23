@@ -240,6 +240,55 @@ reclasificó de "sin atribuir" a **IP conocida del analista (excluida)**, como e
 analista confirmó. `189.216.118.104` (1 petición) queda como "sin atribuir, confianza
 baja".
 
+## Sexta ronda — tercer caso real (pentest del equipo, engagement `dvwa-pentest-df-equipo`, 2026-11-23, green-hat)
+
+Pasada forense tras **nuestro propio** pentest del contenedor real `dvwa`
+(`10.50.0.34`, por salto SSH a través de la Kali `10.50.0.68`), recolección **en
+caliente sin `pause`** (lab compartido), `hash_pre == hash_post`, cadena de 7 eslabones
+íntegra, `access.log` (378) == `docker logs` (378) → sin borrado. Esta vez el atacante
+de la ventana del 23/11 **somos nosotros** (la Kali `10.50.0.68`, que **no** se excluye
+para esa ventana), bien separado del **ataque Red Team** del 20/11
+(`200.13.89.215`/`200.13.89.183`) y del **setup del lab** del 20/11 ~00:03 (la misma
+Kali). Tres mejoras pedidas y aplicadas, más una corrección de atribución:
+
+30. **Paso 0.1 — pedir TODAS las IP del equipo en el periodo, no solo la de hoy.** El
+    Power pedía declarar las IP conocidas pero no insistía en que un analista puede
+    haber usado **varias IP a lo largo de los días** que cubren los logs (casa, VPN,
+    oficina). Añadido al Paso 0.1 de `docker-evidence-analysis`: mirar el rango temporal
+    del log y **preguntar al humano qué IP usó cada quién en ESAS fechas**, añadiéndolas
+    con dueño y periodo. **Corrección de atribución del caso:** `<IP-analista>`
+    (19–20/11) era del **analista**, no de la Red Team; se reclasificó como IP conocida
+    excluida tras confirmación del analista. (`189.216.118.104`, 1 petición, queda "sin
+    atribuir, confianza baja".)
+31. **Brute Force por tamaño de respuesta (`%b`).** Cuando el login responde SIEMPRE
+    `200` (misma página en éxito y fallo, como el módulo Brute Force de DVWA), el código
+    no distingue. Añadido al Paso 2 un `grep` que agrupa los intentos por endpoint
+    mostrando el `%b` del combined: el/los tamaño(s) atípicos son los aciertos.
+    Verificado en nuestras 6 tentativas: fallos = **4647 B**; **admin:password = 4685 B**
+    y **gordonb:abc123 = 4689 B** saltaron a la vista (la sonda Nmap NSE dio 302/306).
+32. **Leer el contenido en base de datos desde el export (Paso 3.1 nuevo).** El XSS
+    almacenado deja el payload en la **BD**, no en `access.log` (va en el cuerpo POST) y
+    `strings` sobre `guestbook.ibd`/`ibdata1` **no** lo recupera (páginas InnoDB
+    bufferadas/redo). Añadido el Paso 3.1: arrancar un **MySQL/MariaDB jetable** sobre
+    una **copia** de `/var/lib/mysql`, con la **misma versión** (leer
+    `debian-*.flag`/`mysql_upgrade_info`) y `--skip-grant-tables`, **nunca** contra el
+    contenedor. Probado en local con Docker (OrbStack, imagen `mariadb:10.1`): recuperó
+    el comentario `KIRO-POC → <script>alert('KIRO')</script>` del guestbook y los hashes
+    de `dvwa.users` (`admin=5f4dcc3b…`=password, `gordonb=e99a18c4…`=abc123, que
+    corroboran el brute force). Nota añadida: la **Kali solo tenía los clientes**
+    `mysql`/`mariadb`, sin servidor ni Docker → la guía ahora exige **avisar al humano
+    antes de instalar nada** y ofrece la alternativa de hacerlo en el puesto del analista
+    con Docker local, trayendo una copia del datadir (≈110 MB) por el salto SSH.
+33. **Límite explícito: access.log no tiene cuerpos POST, cookies ni fallos de
+    cliente.** Añadida una nota de límite en `docker-evidence-analysis` (fin del Paso 2)
+    y en el Overview de `POWER.md`: el combined solo prueba que *se tocó el endpoint*;
+    los cuerpos POST (login, guestbook, CAPTCHA, reto JavaScript), las **cookies**
+    (secuestro de `PHPSESSID`) y lo **client-side** (XSS DOM, CSP Bypass, JavaScript) no
+    están ahí. Para verlos hace falta **captura de red**, **CloudWatch** o leer la **BD**
+    (Paso 3.1). En nuestro caso, de los 9 módulos del vector, el access.log recuperó solo
+    los que van por URL (Brute Force con credenciales, File Inclusion `page=`, XSS
+    reflejado); el resto solo figura como "se tocó el endpoint" vía POST.
+
 ## Pendientes / mejoras futuras
 
 - Validar las rutas de log sobre el `.tar` real del DVWA del laboratorio.
